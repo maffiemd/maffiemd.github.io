@@ -1,0 +1,982 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Steelers News Reader</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --surface: #171a21;
+    --surface2: #1e222b;
+    --border: #2a2f3a;
+    --accent: #ffb612; /* Steelers gold */
+    --text: #e8eaf0;
+    --text-muted: #8b90a0;
+    --link: #6fa8ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    margin: 0;
+    padding: 0;
+  }
+  header {
+    padding: 20px 24px 16px;
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 10;
+  }
+  h1 {
+    font-size: 20px;
+    margin: 0 0 4px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  h1 .bar { width: 6px; height: 20px; background: var(--accent); border-radius: 2px; display: inline-block; }
+  .status { font-size: 12px; color: var(--text-muted); margin-bottom: 14px; }
+  .status a { color: var(--link); cursor: pointer; text-decoration: underline; }
+
+  .filter-group { margin-bottom: 10px; }
+  .filter-group-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 6px;
+  }
+  .filter-group-toggle {
+    background: none;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    padding: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+  }
+  .caret {
+    display: inline-block;
+    font-size: 10px;
+    color: var(--text-muted);
+    transition: transform 0.15s ease;
+  }
+  .filter-group:not(.collapsed) .caret { transform: rotate(90deg); }
+  .filter-group-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+  }
+  .filter-group-actions { display: flex; gap: 10px; font-size: 11.5px; }
+  .filter-group-actions button {
+    background: none;
+    border: none;
+    color: var(--link);
+    cursor: pointer;
+    font-size: 11.5px;
+    padding: 0;
+    text-decoration: underline;
+  }
+  .filter-group.collapsed .filter-group-actions { display: none; }
+  .filter-group.collapsed .pill-list { display: none; }
+
+  .pill-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    padding-bottom: 4px;
+  }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 4px 10px 4px 8px;
+    font-size: 12.5px;
+    cursor: pointer;
+    user-select: none;
+    color: var(--text);
+  }
+  .pill input { accent-color: var(--accent); cursor: pointer; }
+  .pill.unchecked { color: var(--text-muted); opacity: 0.55; }
+
+  .global-actions { display: flex; gap: 12px; font-size: 12px; margin-top: 6px; }
+  .global-actions button {
+    background: none;
+    border: none;
+    color: var(--link);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 0;
+    text-decoration: underline;
+  }
+
+  /* Two-column layout: articles on the left, Bluesky on the right */
+  .columns {
+    display: flex;
+    gap: 28px;
+    align-items: flex-start;
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 16px 24px 60px;
+  }
+  .col-articles { flex: 1 1 60%; min-width: 0; }
+  .col-bsky {
+    flex: 0 0 380px;
+    max-width: 380px;
+    border-left: 1px solid var(--border);
+    padding-left: 24px;
+    position: sticky;
+    top: 190px;
+    max-height: calc(100vh - 210px);
+    overflow-y: auto;
+  }
+  .col-bsky-header {
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 4px;
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .bsky-status { font-size: 11px; color: var(--text-muted); font-weight: 400; text-transform: none; letter-spacing: 0; }
+  .bsky-mode-toggle {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+  .bsky-mode-btn {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 11.5px;
+    padding: 5px 10px;
+    border-radius: 20px;
+    cursor: pointer;
+  }
+  .bsky-mode-btn.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #17130a;
+    font-weight: 600;
+  }
+
+  @media (max-width: 860px) {
+    .columns { flex-direction: column; }
+    .col-bsky {
+      border-left: none;
+      border-top: 1px solid var(--border);
+      padding-left: 0;
+      padding-top: 16px;
+      max-width: none;
+      position: static;
+      max-height: none;
+    }
+  }
+
+  .article {
+    display: flex;
+    gap: 14px;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .article-meta {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 4px;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .site-badge {
+    background: var(--surface2);
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  .article-title {
+    font-size: 15.5px;
+    font-weight: 600;
+    line-height: 1.35;
+    margin: 0 0 4px;
+  }
+  .article-title a { color: var(--text); text-decoration: none; }
+  .article-title a:hover { color: var(--accent); text-decoration: underline; }
+  .article-author { font-size: 12.5px; color: var(--text-muted); margin-bottom: 4px; }
+  .article-excerpt { font-size: 13px; color: var(--text-muted); line-height: 1.45; margin: 0; }
+
+  /* Bluesky post cards */
+  .bsky-post {
+    display: flex;
+    gap: 10px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .bsky-post:hover { background: var(--surface); }
+  .bsky-avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: var(--surface2);
+    object-fit: cover;
+  }
+  .bsky-post-body { flex: 1; min-width: 0; }
+  .bsky-post-head { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+  .bsky-post-name { font-weight: 600; font-size: 13px; }
+  .bsky-post-handle, .bsky-post-time { color: var(--text-muted); font-size: 11.5px; }
+  .bsky-repost-label { font-size: 10.5px; color: var(--text-muted); margin-bottom: 2px; }
+  .bsky-post-text {
+    font-size: 13.5px;
+    line-height: 1.42;
+    margin: 4px 0 6px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .bsky-post-text a { color: var(--link); }
+  .bsky-post-meta { font-size: 11px; color: var(--text-muted); display: flex; gap: 10px; }
+  .bsky-embed-img { max-width: 100%; border-radius: 6px; margin-top: 4px; display: block; }
+  .bsky-embed-external {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px;
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--text-muted);
+    text-decoration: none;
+    display: block;
+  }
+  .bsky-embed-external:hover { border-color: var(--accent); }
+
+  .empty, .loading, .error {
+    color: var(--text-muted);
+    font-size: 14px;
+    padding: 40px 0;
+    text-align: center;
+  }
+  .error { color: #e68a8a; }
+
+  footer {
+    text-align: center;
+    font-size: 11px;
+    color: var(--text-muted);
+    padding: 20px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span class="bar"></span>Steelers News Reader</h1>
+  <div class="status" id="status">Loading feeds…</div>
+
+  <div class="filter-group collapsed" id="authorGroup">
+    <div class="filter-group-header">
+      <button class="filter-group-toggle" data-target="authorGroup" aria-expanded="false">
+        <span class="caret">▸</span>
+        <span class="filter-group-label">Authors</span>
+      </button>
+      <div class="filter-group-actions">
+        <button id="checkAllAuthors">Check all</button>
+        <button id="uncheckAllAuthors">Uncheck all</button>
+      </div>
+    </div>
+    <div class="pill-list" id="authorList"></div>
+  </div>
+
+  <div class="filter-group collapsed" id="siteGroup">
+    <div class="filter-group-header">
+      <button class="filter-group-toggle" data-target="siteGroup" aria-expanded="false">
+        <span class="caret">▸</span>
+        <span class="filter-group-label">Sites</span>
+      </button>
+      <div class="filter-group-actions">
+        <button id="checkAllSites">Check all</button>
+        <button id="uncheckAllSites">Uncheck all</button>
+      </div>
+    </div>
+    <div class="pill-list" id="siteList"></div>
+  </div>
+
+  <div class="global-actions">
+    <button id="refresh">Refresh</button>
+  </div>
+</header>
+
+<div class="columns">
+  <section class="col-articles">
+    <main id="main">
+      <div class="loading">Fetching latest articles…</div>
+    </main>
+  </section>
+  <aside class="col-bsky">
+    <div class="col-bsky-header">Bluesky <span class="bsky-status" id="bskyStatus"></span></div>
+    <div class="bsky-mode-toggle">
+      <button class="bsky-mode-btn" id="bskyModeWriters" data-mode="writers">Steelers Writers</button>
+      <button class="bsky-mode-btn" id="bskyModeFeed" data-mode="feed">#Steelers Feed</button>
+    </div>
+    <div id="bskyMain"><div class="loading">Loading Bluesky posts…</div></div>
+  </aside>
+</div>
+
+<footer>
+  Pulls live from Behind The Steel Curtain, Steelers Depot, Steel Curtain Network, Steelers Now, and Still Curtain RSS feeds, plus recent Bluesky posts. Uncheck an author or site to hide their articles — your selection is saved in this page's URL, so bookmarking it keeps your filters.
+</footer>
+
+<script>
+(function () {
+  const FEEDS = [
+    { name: "BTSC", label: "Behind The Steel Curtain", url: "https://www.behindthesteelcurtain.com/rss/index.xml" },
+    { name: "SD", label: "Steelers Depot", url: "https://steelersdepot.com/feed/" },
+    { name: "SCN", label: "Steel Curtain Network", url: "https://www.steelcurtainnetwork.com/feed/" },
+    { name: "SN", label: "Steelers Now", url: "https://steelersnow.com/feed/" },
+    { name: "STC", label: "Still Curtain", url: "https://stillcurtain.com/feed/" }
+  ];
+
+  const BSKY_HANDLES = [
+    "jhartmanpit.bsky.social",
+    "byjoshcarney.bsky.social",
+    "nickfarabaugh.bsky.social",
+    "bepryor.bsky.social",
+    "mikedefabo.bsky.social",
+    "chrishalicke.bsky.social",
+    "pittsburghsteeler.bsky.social",
+    "bgnation1.bsky.social",
+    "jbaileynfl.bsky.social"
+  ];
+  const BSKY_POSTS_PER_AUTHOR = 15;
+  const BSKY_TOTAL_SHOWN = 30;
+  const BSKY_HASHTAG_QUERY = "#Steelers";
+  const BSKY_HASHTAG_LIMIT = 50;
+
+  // Public CORS proxies, since a static bookmarked page can't fetch
+  // another site's feed directly from the browser. Free proxies like
+  // these occasionally fail for a specific request (overloaded,
+  // rate-limited, or blocked by the target site) even when the feed
+  // itself is fine -- so try each in order and only report failure
+  // if all of them fail.
+  const CORS_PROXIES = [
+    (url) => "https://api.allorigins.win/raw?url=" + encodeURIComponent(url),
+    (url) => "https://corsproxy.io/?url=" + encodeURIComponent(url),
+    (url) => "https://api.codetabs.com/v1/proxy?quest=" + encodeURIComponent(url)
+  ];
+
+  // Randomize proxy order per call rather than always trying the same
+  // one first. With this page open on many machines at once, always
+  // hitting proxy #1 first would concentrate everyone's load on that
+  // one free service instead of spreading it across all three.
+  function shuffledProxies() {
+    const arr = CORS_PROXIES.slice();
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  }
+
+  // Generic fetch helper: optionally try the URL directly first (some
+  // APIs, like Bluesky's public AppView, are documented as CORS-open),
+  // then fall back through the proxy list in random order. `validate`
+  // lets the caller reject a "200 OK" response that isn't actually
+  // usable content (e.g. a proxy's own error page instead of the real
+  // feed/API body).
+  async function fetchWithFallback(url, { direct = false, validate } = {}) {
+    const attempts = [];
+    if (direct) attempts.push(() => fetch(url));
+    for (const buildProxyUrl of shuffledProxies()) {
+      attempts.push(() => fetch(buildProxyUrl(url)));
+    }
+    const errors = [];
+    for (const attempt of attempts) {
+      try {
+        const res = await attempt();
+        if (!res.ok) {
+          errors.push("HTTP " + res.status);
+          continue;
+        }
+        const text = await res.text();
+        if (validate && !validate(text)) {
+          errors.push("response failed validation");
+          continue;
+        }
+        return text;
+      } catch (err) {
+        errors.push(err.message);
+      }
+    }
+    throw new Error("all attempts failed (" + errors.join("; ") + ")");
+  }
+
+  function looksLikeXml(text) {
+    return /<(rss|feed|\?xml)/i.test(text.slice(0, 500));
+  }
+  function looksLikeJson(text) {
+    try { JSON.parse(text); return true; } catch (e) { return false; }
+  }
+
+  const statusEl = document.getElementById("status");
+  const mainEl = document.getElementById("main");
+  const authorListEl = document.getElementById("authorList");
+  const siteListEl = document.getElementById("siteList");
+  const bskyMainEl = document.getElementById("bskyMain");
+  const bskyStatusEl = document.getElementById("bskyStatus");
+  const bskyModeWritersBtn = document.getElementById("bskyModeWriters");
+  const bskyModeFeedBtn = document.getElementById("bskyModeFeed");
+
+  // --- URL-based persistence for both filter dimensions ---
+
+  function getHiddenSetFromURL(paramName) {
+    const params = new URLSearchParams(window.location.search);
+    const hidden = params.get(paramName);
+    return hidden ? new Set(hidden.split(",").map(decodeURIComponent)) : new Set();
+  }
+
+  function saveHiddenSetToURL(paramName, hiddenSet) {
+    const params = new URLSearchParams(window.location.search);
+    if (hiddenSet.size === 0) {
+      params.delete(paramName);
+    } else {
+      params.set(paramName, Array.from(hiddenSet).map(encodeURIComponent).join(","));
+    }
+    const newUrl = window.location.pathname + (params.toString() ? "?" + params.toString() : "");
+    window.history.replaceState({}, "", newUrl);
+  }
+
+  const getHiddenAuthorsFromURL = () => getHiddenSetFromURL("hideAuthors");
+  const saveHiddenAuthorsToURL = (s) => saveHiddenSetToURL("hideAuthors", s);
+  const getHiddenSitesFromURL = () => getHiddenSetFromURL("hideSites");
+  const saveHiddenSitesToURL = (s) => saveHiddenSetToURL("hideSites", s);
+
+  function getBskyModeFromURL() {
+    const params = new URLSearchParams(window.location.search);
+    const mode = params.get("bskyMode");
+    return mode === "feed" ? "feed" : "writers"; // "writers" is the default
+  }
+  function saveBskyModeToURL(mode) {
+    const params = new URLSearchParams(window.location.search);
+    if (mode === "writers") {
+      params.delete("bskyMode"); // default, no need to clutter the URL
+    } else {
+      params.set("bskyMode", mode);
+    }
+    const newUrl = window.location.pathname + (params.toString() ? "?" + params.toString() : "");
+    window.history.replaceState({}, "", newUrl);
+  }
+
+  // --- RSS/Atom feed parsing ---
+
+  function textOf(el, tagName) {
+    const node = el.getElementsByTagName(tagName)[0];
+    return node ? node.textContent.trim() : "";
+  }
+
+  function extractAuthorRSS(item) {
+    let val = textOf(item, "dc:creator");
+    if (val) return val;
+    val = textOf(item, "author");
+    if (val) {
+      const match = val.match(/\(([^)]+)\)/);
+      return match ? match[1].trim() : val;
+    }
+    val = textOf(item, "creator");
+    if (val) return val;
+    return "Unknown";
+  }
+
+  function extractAuthorAtom(entry) {
+    const authorNode = entry.getElementsByTagName("author")[0];
+    if (authorNode) {
+      const name = textOf(authorNode, "name");
+      if (name) return name;
+    }
+    return "Unknown";
+  }
+
+  function getAtomLink(entry) {
+    const linkNodes = Array.from(entry.getElementsByTagName("link"));
+    const alt = linkNodes.find((n) => !n.getAttribute("rel") || n.getAttribute("rel") === "alternate");
+    return alt ? alt.getAttribute("href") || "" : (linkNodes[0] ? linkNodes[0].getAttribute("href") || "" : "");
+  }
+
+  function stripHtml(html) {
+    if (!html) return "";
+    const tmp = document.createElement("div");
+    tmp.innerHTML = html;
+    return (tmp.textContent || tmp.innerText || "").replace(/\s+/g, " ").trim();
+  }
+
+  function extractExcerpt(rawHtml, maxSentences, maxChars) {
+    const text = stripHtml(rawHtml);
+    if (!text) return "";
+    const sentences = text.match(/[^.!?]+[.!?]+(\s|$)/g) || [text];
+    let excerpt = sentences.slice(0, maxSentences).join(" ").trim();
+    if (excerpt.length > maxChars) excerpt = excerpt.slice(0, maxChars).trim() + "…";
+    return excerpt;
+  }
+
+  // Some feeds put multiple co-authors in one byline string, e.g.
+  // "Jarrett Bailey and Joey Bray" or "A, B & C" -- split that into
+  // individual names so each can be filtered on its own, while the
+  // original joined string is kept separately for display.
+  function splitAuthors(authorStr) {
+    if (!authorStr) return ["Unknown"];
+    return authorStr
+      .split(/\s*,\s*|\s+&\s+|\s+and\s+/i)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+
+  function parseFeed(xmlText, sourceMeta) {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(xmlText, "application/xml");
+    const parseError = doc.getElementsByTagName("parsererror")[0];
+    if (parseError) throw new Error("Could not parse " + sourceMeta.label + "'s feed (unexpected format).");
+
+    const rssItems = Array.from(doc.getElementsByTagName("item"));
+    if (rssItems.length > 0) {
+      return rssItems.map((item) => {
+        const title = textOf(item, "title");
+        const link = textOf(item, "link");
+        const pubDateRaw = textOf(item, "pubDate");
+        const pubDate = pubDateRaw ? new Date(pubDateRaw) : null;
+        const author = extractAuthorRSS(item);
+        const rawExcerptHtml = textOf(item, "description") || textOf(item, "content:encoded") || "";
+        const excerpt = extractExcerpt(rawExcerptHtml, 3, 320);
+        return {
+          title, link, pubDate, pubDateRaw, author, excerpt,
+          authorList: splitAuthors(author),
+          source: sourceMeta.name,
+          sourceLabel: sourceMeta.label
+        };
+      });
+    }
+
+    const atomEntries = Array.from(doc.getElementsByTagName("entry"));
+    if (atomEntries.length === 0) {
+      throw new Error(
+        sourceMeta.label + "'s feed parsed fine but contained no <item> (RSS) or <entry> (Atom) elements"
+      );
+    }
+    return atomEntries.map((entry) => {
+      const title = textOf(entry, "title");
+      const link = getAtomLink(entry);
+      const pubDateRaw = textOf(entry, "published") || textOf(entry, "updated");
+      const pubDate = pubDateRaw ? new Date(pubDateRaw) : null;
+      const author = extractAuthorAtom(entry);
+      const rawExcerptHtml = textOf(entry, "content") || textOf(entry, "summary") || "";
+      const excerpt = extractExcerpt(rawExcerptHtml, 3, 320);
+      return {
+        title, link, pubDate, pubDateRaw, author, excerpt,
+        authorList: splitAuthors(author),
+        source: sourceMeta.name,
+        sourceLabel: sourceMeta.label
+      };
+    });
+  }
+
+  // --- Bluesky ---
+
+  function escapeHtml(str) {
+    return str
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  }
+
+  function linkifyText(text) {
+    const escaped = escapeHtml(text);
+    return escaped.replace(
+      /(https?:\/\/[^\s<]+)/g,
+      (url) => `<a href="${url}" target="_blank" rel="noopener">${url}</a>`
+    );
+  }
+
+  function normalizePostView(post, opts) {
+    post = post || {};
+    opts = opts || {};
+    const record = post.record || {};
+    const author = post.author || {};
+
+    const createdAtRaw = record.createdAt || post.indexedAt;
+    const createdAt = createdAtRaw ? new Date(createdAtRaw) : null;
+
+    const uriParts = (post.uri || "").split("/");
+    const rkey = uriParts[uriParts.length - 1];
+    const handle = author.handle || opts.fallbackHandle || "";
+    const permalink = "https://bsky.app/profile/" + handle + (rkey ? "/post/" + rkey : "");
+
+    let embedImage = null;
+    let embedExternal = null;
+    const embed = post.embed;
+    if (embed) {
+      if (embed.$type === "app.bsky.embed.images#view" && embed.images && embed.images[0]) {
+        embedImage = embed.images[0].thumb;
+      } else if (embed.$type === "app.bsky.embed.external#view" && embed.external) {
+        embedExternal = {
+          title: embed.external.title || embed.external.uri,
+          uri: embed.external.uri
+        };
+      }
+    }
+
+    return {
+      text: record.text || "",
+      displayName: author.displayName || handle,
+      handle,
+      avatar: author.avatar || "",
+      createdAt,
+      permalink,
+      isRepost: !!opts.isRepost,
+      repostedBy: opts.isRepost ? opts.repostedBy : null,
+      likeCount: post.likeCount || 0,
+      repostCount: post.repostCount || 0,
+      replyCount: post.replyCount || 0,
+      embedImage,
+      embedExternal
+    };
+  }
+
+  // Author-feed items come wrapped as { post, reason? } -- reason is
+  // present when it's a repost rather than an original post.
+  function normalizeFeedItem(item, requestedHandle) {
+    const isRepost = !!(item.reason && item.reason.$type === "app.bsky.feed.defs#reasonRepost");
+    return normalizePostView(item.post, {
+      fallbackHandle: requestedHandle,
+      isRepost,
+      repostedBy: requestedHandle
+    });
+  }
+
+  // searchPosts results are plain PostView objects, not wrapped in a
+  // feed item, so there's no repost/reason info to unwrap.
+  function normalizeSearchResult(postView) {
+    return normalizePostView(postView, {});
+  }
+
+  async function fetchBlueskyPosts() {
+    const results = await Promise.allSettled(
+      BSKY_HANDLES.map(async (handle) => {
+        const url = "https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed?actor="
+          + encodeURIComponent(handle) + "&limit=" + BSKY_POSTS_PER_AUTHOR + "&filter=posts_no_replies";
+        // Bluesky's public AppView is documented as open/unauthenticated
+        // and (per real working examples) usable directly from browser
+        // JS -- try that first, and only fall back to the CORS proxies
+        // if it turns out to be blocked for some reason.
+        const text = await fetchWithFallback(url, { direct: true, validate: looksLikeJson });
+        const data = JSON.parse(text);
+        return (data.feed || []).map((item) => normalizeFeedItem(item, handle));
+      })
+    );
+
+    let posts = [];
+    const errors = [];
+    results.forEach((result, i) => {
+      if (result.status === "fulfilled") {
+        posts = posts.concat(result.value);
+      } else {
+        errors.push(BSKY_HANDLES[i] + ": " + result.reason.message);
+      }
+    });
+
+    posts.sort((a, b) => {
+      const ta = a.createdAt && !isNaN(a.createdAt) ? a.createdAt.getTime() : 0;
+      const tb = b.createdAt && !isNaN(b.createdAt) ? b.createdAt.getTime() : 0;
+      return tb - ta;
+    });
+
+    return { posts: posts.slice(0, BSKY_TOTAL_SHOWN), errors };
+  }
+
+  async function fetchBlueskyHashtagFeed() {
+    // NOTE: currently unused -- Bluesky's searchPosts endpoint returns
+    // a 403 for anonymous requests (confirmed live), so "#Steelers
+    // Feed" mode shows a placeholder instead of calling this. Left
+    // here in case authenticated search gets added later.
+    const url = "https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts?q="
+      + encodeURIComponent(BSKY_HASHTAG_QUERY) + "&sort=latest&limit=" + BSKY_HASHTAG_LIMIT;
+    try {
+      const text = await fetchWithFallback(url, { direct: true, validate: looksLikeJson });
+      const data = JSON.parse(text);
+      const posts = (data.posts || []).map(normalizeSearchResult);
+      return { posts, errors: [] };
+    } catch (err) {
+      return { posts: [], errors: [BSKY_HASHTAG_QUERY + " search: " + err.message] };
+    }
+  }
+
+  function renderBskyPosts(posts, errors) {
+    if (posts.length === 0) {
+      bskyMainEl.innerHTML = '<div class="error">' +
+        (errors.length ? errors.join("<br>") : "No posts found.") +
+        "</div>";
+      return;
+    }
+    bskyMainEl.innerHTML = "";
+    posts.forEach((p) => {
+      const div = document.createElement("div");
+      div.className = "bsky-post";
+      const timeStr = p.createdAt && !isNaN(p.createdAt)
+        ? p.createdAt.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " +
+          p.createdAt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+        : "";
+      const avatarHtml = p.avatar
+        ? `<img class="bsky-avatar" src="${p.avatar}" alt="" loading="lazy">`
+        : `<div class="bsky-avatar"></div>`;
+      const embedHtml = p.embedImage
+        ? `<img class="bsky-embed-img" src="${p.embedImage}" alt="" loading="lazy">`
+        : (p.embedExternal
+          ? `<a class="bsky-embed-external" href="${p.embedExternal.uri}" target="_blank" rel="noopener">${escapeHtml(p.embedExternal.title)}</a>`
+          : "");
+      div.innerHTML = `
+        ${avatarHtml}
+        <div class="bsky-post-body">
+          ${p.isRepost ? `<div class="bsky-repost-label">🔁 Reposted by @${p.repostedBy}</div>` : ""}
+          <div class="bsky-post-head">
+            <span class="bsky-post-name">${escapeHtml(p.displayName)}</span>
+            <span class="bsky-post-handle">@${p.handle}</span>
+          </div>
+          <div class="bsky-post-text">${linkifyText(p.text)}</div>
+          ${embedHtml}
+          <div class="bsky-post-meta">
+            <span>${timeStr}</span>
+            <span>♥ ${p.likeCount}</span>
+            <span>🔁 ${p.repostCount}</span>
+          </div>
+        </div>
+      `;
+      // Make the whole card clickable through to the post on bsky.app
+      // (useful since long posts get truncated in the feed API) --
+      // but a click on an actual link inside the card (a URL in the
+      // post text, or the external-link embed) should go to that
+      // link instead of double-navigating to the post itself.
+      div.style.cursor = "pointer";
+      div.addEventListener("click", (e) => {
+        if (e.target.closest("a")) return;
+        window.open(p.permalink, "_blank", "noopener");
+      });
+      bskyMainEl.appendChild(div);
+    });
+  }
+
+  function updateBskyModeButtons(mode) {
+    bskyModeWritersBtn.classList.toggle("active", mode === "writers");
+    bskyModeFeedBtn.classList.toggle("active", mode === "feed");
+  }
+
+  async function loadBluesky() {
+    const mode = getBskyModeFromURL();
+    updateBskyModeButtons(mode);
+
+    if (mode === "feed") {
+      // #Steelers search requires an authenticated Bluesky session
+      // (confirmed: anonymous calls get a 403 from Bluesky's own
+      // server, not a proxy/network issue), which this static page
+      // intentionally doesn't do. Show a placeholder instead of
+      // spending a request on a call that's known to fail.
+      bskyStatusEl.textContent = "";
+      bskyMainEl.innerHTML = '<div class="empty">Just like the Steelers roster, this feature is under construction.</div>';
+      return;
+    }
+
+    bskyStatusEl.textContent = "loading…";
+    try {
+      const { posts, errors } = await fetchBlueskyPosts();
+      renderBskyPosts(posts, errors);
+      bskyStatusEl.textContent = errors.length
+        ? posts.length + " posts (" + errors.length + " account" + (errors.length > 1 ? "s" : "") + " failed)"
+        : posts.length + " posts";
+    } catch (err) {
+      bskyStatusEl.textContent = "failed to load";
+      bskyMainEl.innerHTML = '<div class="error">' + err.message + "</div>";
+    }
+  }
+
+  // --- Rendering (articles) ---
+
+  function renderPills(container, values, hiddenSet, saveFn, onToggle) {
+    container.innerHTML = "";
+    values.forEach((value) => {
+      const label = document.createElement("label");
+      label.className = "pill" + (hiddenSet.has(value) ? " unchecked" : "");
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = !hiddenSet.has(value);
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) hiddenSet.delete(value);
+        else hiddenSet.add(value);
+        label.classList.toggle("unchecked", !checkbox.checked);
+        saveFn(hiddenSet);
+        onToggle();
+      });
+      label.appendChild(checkbox);
+      label.appendChild(document.createTextNode(value));
+      container.appendChild(label);
+    });
+  }
+
+  function renderArticles(articles, hiddenAuthors, hiddenSites) {
+    // Hide an article if ANY of its listed authors is hidden (so
+    // unchecking someone also hides pieces they co-wrote), not just
+    // when the whole joined byline string happens to match exactly.
+    const visible = articles.filter(
+      (a) => !a.authorList.some((name) => hiddenAuthors.has(name)) && !hiddenSites.has(a.sourceLabel)
+    );
+    if (visible.length === 0) {
+      mainEl.innerHTML = '<div class="empty">No articles to show — everything is filtered out, or nothing loaded.</div>';
+      return;
+    }
+    mainEl.innerHTML = "";
+    visible.forEach((a) => {
+      const div = document.createElement("div");
+      div.className = "article";
+      const dateStr = a.pubDate && !isNaN(a.pubDate) ? a.pubDate.toLocaleDateString(undefined, { month: "short", day: "numeric" }) : (a.pubDateRaw || "");
+      div.innerHTML = `
+        <div style="flex:1">
+          <div class="article-meta">
+            <span class="site-badge">${a.sourceLabel}</span>
+            <span>${dateStr}</span>
+          </div>
+          <div class="article-title"><a href="${a.link}" target="_blank" rel="noopener">${a.title}</a></div>
+          <div class="article-author">By ${a.author}</div>
+          ${a.excerpt ? `<p class="article-excerpt">${a.excerpt}</p>` : ""}
+        </div>
+      `;
+      mainEl.appendChild(div);
+    });
+  }
+
+  async function loadFeeds() {
+    statusEl.textContent = "Loading feeds…";
+    mainEl.innerHTML = '<div class="loading">Fetching latest articles…</div>';
+
+    const results = await Promise.allSettled(
+      FEEDS.map(async (feed) => {
+        const text = await fetchWithFallback(feed.url, { direct: false, validate: looksLikeXml });
+        return parseFeed(text, feed);
+      })
+    );
+
+    let allArticles = [];
+    const errors = [];
+    results.forEach((result, i) => {
+      if (result.status === "fulfilled") {
+        allArticles = allArticles.concat(result.value);
+      } else {
+        errors.push(FEEDS[i].label + ": " + result.reason.message);
+      }
+    });
+
+    allArticles.sort((a, b) => {
+      const ta = a.pubDate && !isNaN(a.pubDate) ? a.pubDate.getTime() : 0;
+      const tb = b.pubDate && !isNaN(b.pubDate) ? b.pubDate.getTime() : 0;
+      return tb - ta;
+    });
+
+    if (allArticles.length === 0) {
+      statusEl.innerHTML = '<span class="error">Could not load any feed. ' + (errors[0] || "") + '</span> — <a id="retryLink">try again</a>';
+      document.getElementById("retryLink").addEventListener("click", loadFeeds);
+      mainEl.innerHTML = '<div class="error">' + errors.join("<br>") + '</div>';
+      return;
+    }
+
+    statusEl.textContent = "Loaded " + allArticles.length + " articles"
+      + (errors.length ? " (" + errors.join("; ") + ")" : "")
+      + " — last updated " + new Date().toLocaleTimeString();
+
+    const authors = Array.from(new Set(allArticles.flatMap((a) => a.authorList))).sort((a, b) => a.localeCompare(b));
+    const sites = Array.from(new Set(allArticles.map((a) => a.sourceLabel))).sort((a, b) => a.localeCompare(b));
+    const hiddenAuthors = getHiddenAuthorsFromURL();
+    const hiddenSites = getHiddenSitesFromURL();
+
+    Array.from(hiddenAuthors).forEach((name) => {
+      if (!authors.includes(name)) hiddenAuthors.delete(name);
+    });
+    Array.from(hiddenSites).forEach((site) => {
+      if (!sites.includes(site)) hiddenSites.delete(site);
+    });
+
+    function rerender() {
+      renderArticles(allArticles, hiddenAuthors, hiddenSites);
+    }
+
+    renderPills(authorListEl, authors, hiddenAuthors, saveHiddenAuthorsToURL, rerender);
+    renderPills(siteListEl, sites, hiddenSites, saveHiddenSitesToURL, rerender);
+    rerender();
+  }
+
+  document.getElementById("refresh").addEventListener("click", () => {
+    loadFeeds();
+    loadBluesky();
+  });
+
+  document.getElementById("checkAllAuthors").addEventListener("click", () => {
+    const hiddenAuthors = getHiddenAuthorsFromURL();
+    hiddenAuthors.clear();
+    saveHiddenAuthorsToURL(hiddenAuthors);
+    loadFeeds();
+  });
+  document.getElementById("uncheckAllAuthors").addEventListener("click", () => {
+    const pills = Array.from(authorListEl.querySelectorAll(".pill"));
+    const hiddenAuthors = new Set(pills.map((p) => p.textContent.trim()));
+    saveHiddenAuthorsToURL(hiddenAuthors);
+    loadFeeds();
+  });
+
+  document.getElementById("checkAllSites").addEventListener("click", () => {
+    const hiddenSites = getHiddenSitesFromURL();
+    hiddenSites.clear();
+    saveHiddenSitesToURL(hiddenSites);
+    loadFeeds();
+  });
+  document.getElementById("uncheckAllSites").addEventListener("click", () => {
+    const pills = Array.from(siteListEl.querySelectorAll(".pill"));
+    const hiddenSites = new Set(pills.map((p) => p.textContent.trim()));
+    saveHiddenSitesToURL(hiddenSites);
+    loadFeeds();
+  });
+
+  bskyModeWritersBtn.addEventListener("click", () => {
+    saveBskyModeToURL("writers");
+    loadBluesky();
+  });
+  bskyModeFeedBtn.addEventListener("click", () => {
+    saveBskyModeToURL("feed");
+    loadBluesky();
+  });
+
+  document.querySelectorAll(".filter-group-toggle").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const group = document.getElementById(btn.dataset.target);
+      const collapsed = group.classList.toggle("collapsed");
+      btn.setAttribute("aria-expanded", String(!collapsed));
+    });
+  });
+
+  loadFeeds();
+  loadBluesky();
+
+  // Auto-refresh everything on a timer. 10 minutes keeps things fresh
+  // without piling extra load onto the free CORS proxies, especially
+  // with several people potentially having this open at once.
+  const AUTO_REFRESH_MS = 10 * 60 * 1000;
+  setInterval(() => {
+    loadFeeds();
+    loadBluesky();
+  }, AUTO_REFRESH_MS);
+})();
+</script>
+
+</body>
+</html>
