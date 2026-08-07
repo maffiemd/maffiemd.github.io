@@ -915,10 +915,23 @@
   function updateDocumentTitle() {
     document.title = unseenNewCount > 0 ? "(" + unseenNewCount + ") " + BASE_TITLE : BASE_TITLE;
   }
+  // setInterval(refreshAll, AUTO_REFRESH_MS) below is a plain JS timer,
+  // and browsers throttle those heavily in a hidden/backgrounded tab --
+  // Chrome in particular can stretch "every 60s" out to once every few
+  // minutes once a tab's been hidden for a while. That meant coming
+  // back to the tab could show data that was many minutes stale until
+  // the next (possibly still-throttled) tick happened to land. Force a
+  // real refresh the moment the tab becomes visible again instead of
+  // waiting for the timer to catch up -- guarded to at most once every
+  // 15s so rapid tab-switching doesn't hammer the free CORS proxies.
+  const MIN_FOCUS_REFRESH_GAP_MS = 15 * 1000;
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) {
       unseenNewCount = 0;
       updateDocumentTitle();
+      if (Date.now() - lastRefreshAt > MIN_FOCUS_REFRESH_GAP_MS) {
+        refreshAll();
+      }
     }
   });
 
@@ -1575,7 +1588,7 @@
       const dot = document.createElement("span");
       dot.className = "feed-dot " + (s.ok ? "ok" : "warn");
       dot.title = s.ok
-        ? s.label + ": " + s.count + " articles this refresh"
+        ? s.label + ": " + s.count + " articles"
         : s.label + ": failed this refresh — " + s.error;
       feedHealthDotsEl.appendChild(dot);
 
@@ -1588,7 +1601,7 @@
       name.textContent = s.label;
       const note = document.createElement("span");
       note.className = "feed-health-note";
-      note.textContent = s.ok ? s.count + " articles this refresh" : "failed this refresh — " + s.error;
+      note.textContent = s.ok ? s.count + " articles" : "failed this refresh — " + s.error;
       row.append(rowDot, name, note);
       feedHealthPanelEl.appendChild(row);
     });
@@ -1622,35 +1635,41 @@
     const results = await Promise.allSettled(
       FEEDS.map(async (feed) => {
         const text = await fetchWithFallback(feed.url, { direct: false, validate: looksLikeXml });
-        return capToMostRecent(parseFeed(text, feed), ARTICLES_PER_SITE_CAP);
+        return parseFeed(text, feed);
       })
     );
 
     let fetched = [];
     const errors = [];
-    const succeededSources = new Set();
     feedStatus = [];
     results.forEach((result, i) => {
+      const feed = FEEDS[i];
+      const existingForSource = allArticles.filter((a) => a.source === feed.name);
       if (result.status === "fulfilled") {
-        fetched = fetched.concat(result.value);
-        succeededSources.add(FEEDS[i].name);
-        feedStatus.push({ label: FEEDS[i].label, ok: true, count: result.value.length });
+        // Merge into whatever this source already had, by link, instead
+        // of replacing outright -- a *successful* fetch can still be a
+        // stale snapshot. Steelers Depot's feed sits behind Cloudflare
+        // and was confirmed serving cached responses (cf-cache-status:
+        // HIT, age in the hundreds of seconds), so a "successful" fetch
+        // can genuinely omit an article that was already live and that
+        // this page had already shown a moment earlier -- that's not a
+        // failure this code can detect, just a stale-but-200-OK
+        // response. Only the per-site cap below should ever make an
+        // article actually disappear, by it aging out of the most
+        // recent N -- not a single fetch happening to omit it.
+        const byLink = new Map(existingForSource.map((a) => [a.link, a]));
+        result.value.forEach((a) => byLink.set(a.link, a));
+        const merged = capToMostRecent(Array.from(byLink.values()), ARTICLES_PER_SITE_CAP);
+        fetched = fetched.concat(merged);
+        feedStatus.push({ label: feed.label, ok: true, count: merged.length });
       } else {
-        errors.push(FEEDS[i].label + ": " + result.reason.message);
-        feedStatus.push({ label: FEEDS[i].label, ok: false, error: result.reason.message });
+        // Total failure -- keep exactly what this source already had.
+        fetched = fetched.concat(existingForSource);
+        errors.push(feed.label + ": " + result.reason.message);
+        feedStatus.push({ label: feed.label, ok: false, error: result.reason.message });
       }
     });
     renderFeedHealth();
-
-    // A source failing this one cycle (which does happen with the free
-    // CORS proxies) used to make its articles vanish from the page
-    // entirely, because `fetched` -- built only from sources that
-    // succeeded -- replaced allArticles wholesale below. Keep whatever
-    // was already showing from any source that didn't succeed this
-    // time, so a transient failure only means "didn't refresh," not
-    // "disappeared."
-    const preservedFromFailedSources = allArticles.filter((a) => !succeededSources.has(a.source));
-    fetched = fetched.concat(preservedFromFailedSources);
 
     fetched.sort((a, b) => {
       const ta = a.pubDate && !isNaN(a.pubDate) ? a.pubDate.getTime() : 0;
@@ -1704,9 +1723,12 @@
     renderArticlesUI();
   }
 
+  let lastRefreshAt = 0;
+
   // Flash the Refresh button between gold and black while a refresh
   // (manual, automatic, or the initial load) is in flight.
   async function refreshAll() {
+    lastRefreshAt = Date.now();
     refreshBtn.classList.add("refreshing");
     try {
       await Promise.all([loadFeeds(), loadBluesky()]);
