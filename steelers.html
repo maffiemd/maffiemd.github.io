@@ -880,16 +880,32 @@
   // page scrolls under it, which is what actually made mouseleave work
   // for scroll-past on desktop in the first place -- but keyed on
   // actual viewport intersection, which works for touch scrolling too.
-  // Keyed by link (not element identity) in visibleOnceLinks so the
-  // "has this been seen" state survives renderArticlesUI rebuilding
-  // every article's DOM node from scratch on every render.
-  const visibleOnceLinks = new Set();
+  // Keyed by the specific DOM element (WeakSet), not by link -- an
+  // earlier version keyed this by link so "has this been seen" would
+  // survive renderArticlesUI rebuilding every article's DOM node on
+  // every render. That backfired: once any refresh happens (including
+  // the tab-focus refresh below) while a gold article is on-screen, its
+  // link was already marked "seen" from before, and the brand new div
+  // for it gets immediately observed -- if that fresh element's first
+  // reported state happens to be "not intersecting" (e.g. the list
+  // reshuffled because new articles were merged in, or the freshly
+  // inserted node just hasn't settled into layout yet), the article
+  // got cleared instantly, as if scrolled past, even though nobody
+  // actually looked at it again. Confirmed live: a tab reporting "(2)"
+  // unseen went to zero highlighted articles the moment the tab was
+  // refocused, not because they were seen, but because refocusing
+  // triggered a refresh that rebuilt the list. Keying by element
+  // instead means a freshly rebuilt div always starts with a clean
+  // slate and can only clear once *it* has genuinely been observed
+  // intersecting and then not -- a real scroll-past within one render,
+  // not leftover state from a previous one.
+  const seenElements = new WeakSet();
   const goldVisibilityObserver = new IntersectionObserver((entries) => {
     entries.forEach((entry) => {
       const link = entry.target.dataset.key;
       if (entry.isIntersecting) {
-        visibleOnceLinks.add(link);
-      } else if (visibleOnceLinks.has(link)) {
+        seenElements.add(entry.target);
+      } else if (seenElements.has(entry.target)) {
         unacknowledgedNewLinks.delete(link);
         entry.target.classList.remove("article-new");
       }
@@ -1657,14 +1673,24 @@
         // response. Only the per-site cap below should ever make an
         // article actually disappear, by it aging out of the most
         // recent N -- not a single fetch happening to omit it.
-        const byLink = new Map(existingForSource.map((a) => [a.link, a]));
+        // Carried-over articles must not keep whatever `isNew` they had
+        // from a previous cycle -- that flag is what drives the tab
+        // title's unseen count (newCount below), and an article that's
+        // merely being preserved here (not freshly re-parsed this
+        // cycle) was already counted as new whenever it first appeared.
+        // Leaving a stale isNew:true on it double- (or, cycle after
+        // cycle, N-) counts the same article every time it's excluded
+        // from the feed's response, which is exactly how the tab title
+        // once claimed "6 new articles" that were all ones already seen.
+        const byLink = new Map(existingForSource.map((a) => [a.link, { ...a, isNew: false }]));
         result.value.forEach((a) => byLink.set(a.link, a));
         const merged = capToMostRecent(Array.from(byLink.values()), ARTICLES_PER_SITE_CAP);
         fetched = fetched.concat(merged);
         feedStatus.push({ label: feed.label, ok: true, count: merged.length });
       } else {
-        // Total failure -- keep exactly what this source already had.
-        fetched = fetched.concat(existingForSource);
+        // Total failure -- keep exactly what this source already had
+        // (isNew reset for the same reason as the merge branch above).
+        fetched = fetched.concat(existingForSource.map((a) => ({ ...a, isNew: false })));
         errors.push(feed.label + ": " + result.reason.message);
         feedStatus.push({ label: feed.label, ok: false, error: result.reason.message });
       }
