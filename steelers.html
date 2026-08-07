@@ -235,6 +235,18 @@
     color: var(--accent) !important;
     background: rgba(240, 172, 22, 0.1);
   }
+  .refresh-interval-select {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 12px;
+    font-family: inherit;
+    padding: 4px 8px;
+    border-radius: 20px;
+    cursor: pointer;
+  }
+  .refresh-interval-select:hover { border-color: var(--accent); color: var(--accent); }
+  .refresh-interval-select:focus { outline: none; border-color: var(--accent); }
   .theme-toggle {
     margin-left: auto;
     border: 1px solid var(--border) !important;
@@ -525,6 +537,14 @@
 
   <div class="global-actions">
     <button id="refresh">Refresh</button>
+    <select id="refreshInterval" class="refresh-interval-select" title="Auto-refresh interval">
+      <option value="30000">Every 30s</option>
+      <option value="60000">Every 1 min</option>
+      <option value="120000">Every 2 min</option>
+      <option value="300000">Every 5 min</option>
+      <option value="600000">Every 10 min</option>
+      <option value="0">Auto-refresh off</option>
+    </select>
     <button id="bookmarksToggle" class="bookmarks-toggle">★ Bookmarks (0)</button>
     <button id="themeToggle" class="theme-toggle" type="button">☀ Light</button>
   </div>
@@ -627,7 +647,6 @@
     "chrishalicke.bsky.social",
     "pittsburghsteeler.bsky.social",
     "bgnation1.bsky.social",
-    "jbaileynfl.bsky.social",
     "cartercritiques.bsky.social"
   ];
   const BSKY_POSTS_PER_AUTHOR = 15;
@@ -746,6 +765,7 @@
   const bookmarksToggleBtn = document.getElementById("bookmarksToggle");
   const searchInput = document.getElementById("articleSearch");
   const themeToggleBtn = document.getElementById("themeToggle");
+  const refreshIntervalSelect = document.getElementById("refreshInterval");
 
   // --- Persistence for both filter dimensions and Bluesky mode -------
   // Settings live in the URL first (so a filtered link stays
@@ -851,6 +871,26 @@
   }
   applyTheme(getTheme());
 
+  // Auto-refresh interval, user-selectable. 0 means "off." Falls back
+  // to the 1-minute default if nothing's saved yet or the saved value
+  // no longer matches one of the <select>'s options (e.g. an older
+  // version of this page saved a value this version doesn't offer).
+  const REFRESH_INTERVAL_OPTIONS_MS = [30000, 60000, 120000, 300000, 600000, 0];
+  const DEFAULT_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+  function getRefreshIntervalMs() {
+    const raw = readLocalStorage(STORAGE_PREFIX + "refreshIntervalMs");
+    // Number(null) is 0, which is also the real value for "off" -- if
+    // that were passed straight through, a first-time visitor with
+    // nothing saved yet would default to auto-refresh being off instead
+    // of the intended default, since 0 is a legitimate option.
+    if (raw === null) return DEFAULT_REFRESH_INTERVAL_MS;
+    const stored = Number(raw);
+    return REFRESH_INTERVAL_OPTIONS_MS.includes(stored) ? stored : DEFAULT_REFRESH_INTERVAL_MS;
+  }
+  function saveRefreshIntervalMs(ms) {
+    writeLocalStorage(STORAGE_PREFIX + "refreshIntervalMs", String(ms));
+  }
+
   // --- Persistent module-level state (so check/uncheck-all and
   // individual pill toggles can re-render from already-fetched data
   // without hitting the network again) ---
@@ -931,8 +971,9 @@
   function updateDocumentTitle() {
     document.title = unseenNewCount > 0 ? "(" + unseenNewCount + ") " + BASE_TITLE : BASE_TITLE;
   }
-  // setInterval(refreshAll, AUTO_REFRESH_MS) below is a plain JS timer,
-  // and browsers throttle those heavily in a hidden/backgrounded tab --
+  // The auto-refresh timer set up near the bottom of this file is a
+  // plain JS timer, and browsers throttle those heavily in a hidden/
+  // backgrounded tab --
   // Chrome in particular can stretch "every 60s" out to once every few
   // minutes once a tab's been hidden for a while. That meant coming
   // back to the tab could show data that was many minutes stale until
@@ -1843,13 +1884,23 @@
 
   refreshAll();
 
-  // Auto-refresh everything on a timer. 10 minutes keeps things fresh
-  // without piling extra load onto the free CORS proxies, especially
-  // with several people potentially having this open at once.
-  // TEMP for testing -- was 5 * 60 * 1000 (5 minutes), set back before
-  // sharing this more broadly so it doesn't hammer the free CORS proxies.
-  const AUTO_REFRESH_MS = 1 * 60 * 1000;
-  setInterval(refreshAll, AUTO_REFRESH_MS);
+  // Auto-refresh everything on a user-selectable timer (30s/1/2/5/10
+  // min, or off). Rebuilt from scratch on every change rather than
+  // adjusted in place, since JS has no way to change an existing
+  // interval's delay -- only clear it and start a new one.
+  let autoRefreshTimerId = null;
+  function restartAutoRefreshTimer() {
+    if (autoRefreshTimerId) clearInterval(autoRefreshTimerId);
+    const ms = getRefreshIntervalMs();
+    autoRefreshTimerId = ms > 0 ? setInterval(refreshAll, ms) : null;
+  }
+  refreshIntervalSelect.value = String(getRefreshIntervalMs());
+  restartAutoRefreshTimer();
+  refreshIntervalSelect.addEventListener("change", () => {
+    const ms = Number(refreshIntervalSelect.value);
+    saveRefreshIntervalMs(ms);
+    restartAutoRefreshTimer();
+  });
 
   // --- Test harness --------------------------------------------------
   // Hidden from every normal visitor. Append #test to the URL (any
