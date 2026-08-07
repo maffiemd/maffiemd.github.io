@@ -601,15 +601,21 @@
   };
   const DEFAULT_SITE_COLOR = { bg: "#1e222b", color: "#e8eaf0" };
 
-  // Custom checkbox box/checkmark colors for specific site pills (native
-  // checkboxes only expose one "accent-color", so these three need a
-  // hand-built checkbox to show a different box color vs. check color).
-  // Still Curtain intentionally has no entry -- it keeps the plain
-  // default checkbox.
+  // Custom checkbox box/checkmark colors per site pill (native checkboxes
+  // only expose one "accent-color", which paints every unstyled pill's
+  // checkbox the same page-wide gold regardless of that pill's own
+  // color -- mismatched next to a pill that isn't gold itself, which is
+  // exactly what was reported for Steelers Now/Still Curtain). Every
+  // site gets an explicit entry now, each a light-box-dark-check pair
+  // except the two whose own fill is already light or gold, which
+  // invert so the checkbox still reads as a distinct control against
+  // its own pill.
   const SITE_CHECKBOX_STYLES = {
     "Behind The Steel Curtain": { box: "#111111", check: "#f0ac16" },
     "Steel Curtain Network": { box: MUTED_LIGHT, check: "#111111" },
-    "Steelers Depot": { box: MUTED_LIGHT, check: "#111111" }
+    "Steelers Depot": { box: MUTED_LIGHT, check: "#111111" },
+    "Steelers Now": { box: MUTED_LIGHT, check: "#111111" },
+    "Still Curtain": { box: "#111111", check: MUTED_LIGHT }
   };
 
   const BSKY_HANDLES = [
@@ -863,6 +869,32 @@
   // from scratch every single refresh.
   let unacknowledgedNewLinks = new Set();
   let unseenNewCount = 0;
+
+  // mouseleave (below) is the only thing that clears the gold "new"
+  // highlight, but it never fires on touch devices -- scrolling past
+  // an article or tapping it doesn't generate mouse events, so on
+  // mobile a gold article stayed gold forever (confirmed live: scrolled
+  // a test article ~1000px off-screen and it was still gold). This
+  // observer clears it the same way scrolling normally does on desktop
+  // -- moving a stationary cursor's hit-test across elements as the
+  // page scrolls under it, which is what actually made mouseleave work
+  // for scroll-past on desktop in the first place -- but keyed on
+  // actual viewport intersection, which works for touch scrolling too.
+  // Keyed by link (not element identity) in visibleOnceLinks so the
+  // "has this been seen" state survives renderArticlesUI rebuilding
+  // every article's DOM node from scratch on every render.
+  const visibleOnceLinks = new Set();
+  const goldVisibilityObserver = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      const link = entry.target.dataset.key;
+      if (entry.isIntersecting) {
+        visibleOnceLinks.add(link);
+      } else if (visibleOnceLinks.has(link)) {
+        unacknowledgedNewLinks.delete(link);
+        entry.target.classList.remove("article-new");
+      }
+    });
+  });
 
   // Read state and bookmarks, both keyed by link like the sets above,
   // but persisted straight to localStorage (see loadPersistedLinkSet)
@@ -1264,7 +1296,16 @@
   }
 
   function siteColorFor(site) {
-    return SITE_COLORS[site] || DEFAULT_SITE_COLOR;
+    const colors = SITE_COLORS[site] || DEFAULT_SITE_COLOR;
+    // Steelers Now's border exists only so its near-black fill doesn't
+    // blend into the dark theme's near-black page background -- on the
+    // light theme that fill already has plenty of contrast against the
+    // page on its own, so the border there is just clutter.
+    if (colors.border && document.documentElement.getAttribute("data-theme") === "light") {
+      const { border, ...rest } = colors;
+      return rest;
+    }
+    return colors;
   }
   function siteCheckboxStyleFor(site) {
     return SITE_CHECKBOX_STYLES[site] || null;
@@ -1409,7 +1450,7 @@
         ? a.pubDate.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " " +
           a.pubDate.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
         : (a.pubDateRaw || "");
-      const c = SITE_COLORS[a.sourceLabel] || DEFAULT_SITE_COLOR;
+      const c = siteColorFor(a.sourceLabel);
       div.innerHTML = `
         <div style="flex:1">
           <div class="article-meta">
@@ -1428,8 +1469,15 @@
           unacknowledgedNewLinks.delete(a.link);
           div.classList.remove("article-new");
         }, { once: true });
+        goldVisibilityObserver.observe(div);
       }
       div.querySelector(".article-title a").addEventListener("click", () => {
+        // Opening the article is as clear an acknowledgment as hovering
+        // it, so clear gold here too -- covers a gold article tapped
+        // before it's ever scrolled past (e.g. it's the first one, right
+        // at the top, on mobile where there's no hover to fall back on).
+        unacknowledgedNewLinks.delete(a.link);
+        div.classList.remove("article-new");
         if (readLinks.has(a.link)) return;
         readLinks.add(a.link);
         savePersistedLinkSet("readLinks", readLinks);
@@ -1685,6 +1733,13 @@
     const next = getTheme() === "light" ? "dark" : "light";
     applyTheme(next);
     saveTheme(next);
+    // Badge/pill colors (SITE_COLORS) are resolved to inline styles at
+    // render time, not through CSS vars, so switching the theme alone
+    // doesn't update an already-rendered Steelers Now badge's border --
+    // it needs an actual re-render to pick up the new theme.
+    renderArticlesUI();
+    renderAuthorPills();
+    renderSitePills();
   });
 
   document.getElementById("checkAllAuthors").addEventListener("click", () => {
