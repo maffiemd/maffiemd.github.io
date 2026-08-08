@@ -1040,6 +1040,13 @@
     if (!html) return "";
     const tmp = document.createElement("div");
     tmp.innerHTML = html;
+    // Drop figure/figcaption (photo credits and captions) and
+    // script/style before reading text -- confirmed live that
+    // content:encoded bodies (Steelers Now, e.g.) commonly lead with a
+    // <figure><figcaption> photo credit ahead of the real lead
+    // paragraph, which without this would get read as the start of
+    // the article instead of an actual sentence of it.
+    tmp.querySelectorAll("figure, script, style").forEach((el) => el.remove());
     return (tmp.textContent || tmp.innerText || "").replace(/\s+/g, " ").trim();
   }
 
@@ -1078,7 +1085,16 @@
         const pubDateRaw = textOf(item, "pubDate");
         const pubDate = pubDateRaw ? new Date(pubDateRaw) : null;
         const author = extractAuthorRSS(item);
-        const rawExcerptHtml = textOf(item, "description") || textOf(item, "content:encoded") || "";
+        // content:encoded first, not description -- confirmed live that
+        // Steelers Now's <description> is a short, pre-truncated excerpt
+        // while its <content:encoded> holds the real full article body.
+        // description is still the fallback for feeds without
+        // content:encoded at all (Steelers Depot, Still Curtain), where
+        // this changes nothing since that lookup just returns "".
+        // extractExcerpt below still caps the *display* to 3
+        // sentences/320 chars either way -- this only changes which
+        // underlying text that gets pulled from.
+        const rawExcerptHtml = textOf(item, "content:encoded") || textOf(item, "description") || "";
         const excerpt = extractExcerpt(rawExcerptHtml, 3, 320);
         const commentCount = extractCommentCount(item, "slash:comments");
         return {
