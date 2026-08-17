@@ -16,6 +16,23 @@
     }
   } catch {}
 </script>
+<script>
+  // Same FOUC-prevention pattern as the theme script above, and same
+  // reason -- this has to run synchronously before the rest of the
+  // page paints, so a visitor who hasn't unlocked the page yet never
+  // sees a flash of the real header/articles before the password
+  // screen appears. This only controls what's *visible* -- the actual
+  // password check happens in the main script at the bottom, which
+  // also removes this class on success. This is not real security:
+  // it's a static page with no backend, so anyone can read this exact
+  // check in view-source and bypass it via devtools. It exists only to
+  // keep search engines and casual passers-by from landing here.
+  try {
+    if (localStorage.getItem("steelersNewsReader.accessGranted") !== "yes") {
+      document.documentElement.classList.add("gate-locked");
+    }
+  } catch {}
+</script>
 <style>
   :root {
     --bg: #0f1115;
@@ -74,6 +91,50 @@
     margin: 0;
     padding: 0;
   }
+
+  /* While locked, hide every real direct child of body except the
+     gate itself -- paired with the early <script> above that adds
+     this class before first paint, so nothing real ever flashes. */
+  html.gate-locked body > *:not(#accessGate) { display: none !important; }
+  .access-gate {
+    position: fixed;
+    inset: 0;
+    z-index: 100000;
+    background: var(--bg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .access-gate-form { width: 100%; max-width: 320px; text-align: center; }
+  .access-gate-form h1 { justify-content: center; margin-bottom: 8px; }
+  .access-gate-label { color: var(--text-muted); font-size: 13.5px; margin: 0 0 20px; }
+  .access-gate-input {
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-size: 15px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    margin-bottom: 12px;
+    font-family: inherit;
+    text-align: center;
+  }
+  .access-gate-input:focus { outline: none; border-color: var(--accent); }
+  .access-gate-submit {
+    width: 100%;
+    background: var(--accent-fill);
+    border: none;
+    color: #17130a;
+    font-weight: 600;
+    font-size: 14px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  .access-gate-submit:hover { opacity: 0.9; }
+  .access-gate-error { color: var(--error); font-size: 13px; margin: 14px 0 0; }
   header {
     padding: 20px 24px 16px;
     border-bottom: 1px solid var(--border);
@@ -487,6 +548,16 @@
 </style>
 </head>
 <body>
+
+<div class="access-gate" id="accessGate">
+  <form class="access-gate-form" id="accessGateForm">
+    <h1><span class="bar"></span>Steelers News Reader</h1>
+    <p class="access-gate-label">Enter the password to continue.</p>
+    <input type="password" id="accessGatePassword" class="access-gate-input" placeholder="Password" autocomplete="current-password" autofocus>
+    <button type="submit" class="access-gate-submit">Enter</button>
+    <p class="access-gate-error" id="accessGateError" hidden>Incorrect password.</p>
+  </form>
+</div>
 
 <header>
   <h1><span class="bar"></span>Steelers News Reader</h1>
@@ -1898,25 +1969,74 @@
     });
   });
 
-  refreshAll();
-
-  // Auto-refresh everything on a user-selectable timer (30s/1/2/5/10
-  // min, or off). Rebuilt from scratch on every change rather than
-  // adjusted in place, since JS has no way to change an existing
-  // interval's delay -- only clear it and start a new one.
   let autoRefreshTimerId = null;
   function restartAutoRefreshTimer() {
     if (autoRefreshTimerId) clearInterval(autoRefreshTimerId);
     const ms = getRefreshIntervalMs();
     autoRefreshTimerId = ms > 0 ? setInterval(refreshAll, ms) : null;
   }
-  refreshIntervalSelect.value = String(getRefreshIntervalMs());
-  restartAutoRefreshTimer();
-  refreshIntervalSelect.addEventListener("change", () => {
-    const ms = Number(refreshIntervalSelect.value);
-    saveRefreshIntervalMs(ms);
+
+  // Real app startup, gated behind the password screen below -- a
+  // visitor who never gets past it never triggers a single feed fetch,
+  // sparing the free CORS proxies pointless load from search engines
+  // and casual passers-by.
+  function startApp() {
+    refreshAll();
+
+    // Auto-refresh everything on a user-selectable timer (30s/1/2/5/10
+    // min, or off). Rebuilt from scratch on every change rather than
+    // adjusted in place, since JS has no way to change an existing
+    // interval's delay -- only clear it and start a new one.
+    refreshIntervalSelect.value = String(getRefreshIntervalMs());
     restartAutoRefreshTimer();
-  });
+    refreshIntervalSelect.addEventListener("change", () => {
+      const ms = Number(refreshIntervalSelect.value);
+      saveRefreshIntervalMs(ms);
+      restartAutoRefreshTimer();
+    });
+  }
+
+  // --- Access gate -----------------------------------------------------
+  // Not real security -- see the FOUC-prevention script in <head> for
+  // the full explanation. The password is hashed rather than stored in
+  // plaintext only to raise the bar slightly above "read it directly
+  // in view-source"; it does not make this secure, since the check
+  // itself (and the hash) are still fully visible and bypassable via
+  // devtools.
+  const ACCESS_GATE_PASSWORD_HASH = "03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4";
+  const accessGateEl = document.getElementById("accessGate");
+  const accessGateForm = document.getElementById("accessGateForm");
+  const accessGatePasswordInput = document.getElementById("accessGatePassword");
+  const accessGateErrorEl = document.getElementById("accessGateError");
+
+  async function sha256Hex(text) {
+    const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+    return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+
+  function unlockAccessGate() {
+    document.documentElement.classList.remove("gate-locked");
+    accessGateEl.remove();
+    startApp();
+  }
+
+  if (readLocalStorage(STORAGE_PREFIX + "accessGranted") === "yes") {
+    unlockAccessGate();
+  } else {
+    accessGateForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const hash = await sha256Hex(accessGatePasswordInput.value);
+      if (hash === ACCESS_GATE_PASSWORD_HASH) {
+        writeLocalStorage(STORAGE_PREFIX + "accessGranted", "yes");
+        accessGateErrorEl.hidden = true;
+        unlockAccessGate();
+      } else {
+        accessGateErrorEl.hidden = false;
+        accessGatePasswordInput.value = "";
+        accessGatePasswordInput.focus();
+      }
+    });
+  }
 
   // --- Test harness --------------------------------------------------
   // Hidden from every normal visitor. Append #test to the URL (any
