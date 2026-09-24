@@ -668,6 +668,28 @@
     { name: "STC", label: "Still Curtain", url: "https://stillcurtain.com/feed/" }
   ];
 
+  // The Athletic isn't fetched as a source of its own -- their terms of
+  // service explicitly prohibit automated scraping/data-mining of their
+  // content, and their robots.txt blocks every Claude-related bot by
+  // name with no exceptions. Instead, when a tracked writer posts a
+  // link to an Athletic article on Bluesky (which several of them do
+  // routinely to promote their own pieces), that post's own link-card
+  // data -- title and URL, straight from Bluesky's API, which we
+  // already have unrestricted access to -- gets surfaced as an article
+  // alongside the real RSS ones. This never fetches anything from
+  // nytimes.com directly; a human clicking through afterward isn't
+  // scraping, same as if they'd found the link any other way.
+  const ATHLETIC_SOURCE_NAME = "ATHLETIC_BSKY";
+  const ATHLETIC_SITE_LABEL = "The Athletic";
+  function isAthleticArticleUrl(url) {
+    try {
+      const u = new URL(url);
+      return u.hostname === "www.nytimes.com" && u.pathname.startsWith("/athletic/");
+    } catch {
+      return false;
+    }
+  }
+
   // Background/text colors per site badge. Chosen from well-established
   // accessible color-scale shades (the same family design systems like
   // Tailwind calibrate specifically for AA contrast with white text), and
@@ -698,7 +720,10 @@
     // invisible -- a lighter border keeps the badge/pill readable
     // without changing its dark fill.
     "Steelers Now": { bg: "#23262f", color: OFF_WHITE, border: MUTED_LIGHT },
-    "Still Curtain": { bg: MUTED_LIGHT, color: "#111111" }
+    "Still Curtain": { bg: MUTED_LIGHT, color: "#111111" },
+    // Not an RSS source -- see ATHLETIC_URL_PATTERN below. Contrast-
+    // checked the same way as the others: ~8.2:1 against off-white.
+    "The Athletic": { bg: "#4a3b6b", color: OFF_WHITE }
   };
   const DEFAULT_SITE_COLOR = { bg: "#1e222b", color: "#e8eaf0" };
 
@@ -716,7 +741,8 @@
     "Steel Curtain Network": { box: MUTED_LIGHT, check: "#111111" },
     "Steelers Depot": { box: MUTED_LIGHT, check: "#111111" },
     "Steelers Now": { box: MUTED_LIGHT, check: "#111111" },
-    "Still Curtain": { box: "#111111", check: MUTED_LIGHT }
+    "Still Curtain": { box: "#111111", check: MUTED_LIGHT },
+    "The Athletic": { box: MUTED_LIGHT, check: "#111111" }
   };
 
   const BSKY_HANDLES = [
@@ -762,9 +788,17 @@
   // rate-limited, or blocked by the target site) even when the feed
   // itself is fine -- so try each in order and only report failure
   // if all of them fail.
+  //
+  // corsproxy.io was dropped: it now returns 401 "A valid API key is
+  // required" for every request. allorigins.win and codetabs.com were
+  // both timing out/503ing when this was last checked (2026-09-23) but
+  // are kept as fallbacks in case they recover. cors.eu.org was the one
+  // free proxy confirmed working for all five feeds (200, correct XML,
+  // Access-Control-Allow-Origin: *), so it's listed first and pinned
+  // there -- see shuffledProxies().
   const CORS_PROXIES = [
+    (url) => "https://cors.eu.org/" + url,
     (url) => "https://api.allorigins.win/raw?url=" + encodeURIComponent(url),
-    (url) => "https://corsproxy.io/?url=" + encodeURIComponent(url),
     (url) => "https://api.codetabs.com/v1/proxy?quest=" + encodeURIComponent(url)
   ];
 
@@ -772,13 +806,19 @@
   // one first. With this page open on many machines at once, always
   // hitting proxy #1 first would concentrate everyone's load on that
   // one free service instead of spreading it across all three.
+  //
+  // The first entry is pinned and only the fallbacks are shuffled: with
+  // two of the three currently dead, a fully random order meant roughly
+  // a third of loads sat through two 7s timeouts before reaching the
+  // one proxy that works. Put the healthiest proxy first in
+  // CORS_PROXIES and re-check the others occasionally.
   function shuffledProxies() {
-    const arr = CORS_PROXIES.slice();
-    for (let i = arr.length - 1; i > 0; i--) {
+    const [primary, ...fallbacks] = CORS_PROXIES;
+    for (let i = fallbacks.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
-      [arr[i], arr[j]] = [arr[j], arr[i]];
+      [fallbacks[i], fallbacks[j]] = [fallbacks[j], fallbacks[i]];
     }
-    return arr;
+    return [primary, ...fallbacks];
   }
 
   // Nothing renders until every source has either resolved or failed,
@@ -1395,6 +1435,94 @@
     bskyModeFeedBtn.classList.toggle("active", mode === "feed");
   }
 
+  const ATHLETIC_ARTICLES_CAP = 20;
+  let athleticMergedOnce = false;
+
+  // Surfaces a tracked writer's own Athletic articles via their
+  // Bluesky posts (see the ATHLETIC_* constants and
+  // isAthleticArticleUrl near FEEDS for why this exists instead of
+  // fetching Athletic directly). Reuses the same isNew-detection and
+  // merge-by-link approach loadFeeds() uses for its RSS sources,
+  // sharing the same knownArticleLinks/unacknowledgedNewLinks state so
+  // these participate in the gold "new" highlight and the tab title's
+  // unseen count exactly like a real article would.
+  function mergeAthleticArticles(posts) {
+    const byLink = new Map(
+      allArticles.filter((a) => a.source === ATHLETIC_SOURCE_NAME).map((a) => [a.link, { ...a, isNew: false }])
+    );
+    posts.forEach((p) => {
+      if (!p.embedExternal || !isAthleticArticleUrl(p.embedExternal.uri)) return;
+      const link = p.embedExternal.uri;
+      byLink.set(link, {
+        title: p.embedExternal.title || p.text,
+        link,
+        pubDate: p.createdAt,
+        pubDateRaw: p.createdAt ? p.createdAt.toString() : "",
+        author: p.displayName,
+        excerpt: extractExcerpt(p.text, 3, 320),
+        authorList: [p.displayName],
+        commentCount: null,
+        source: ATHLETIC_SOURCE_NAME,
+        sourceLabel: ATHLETIC_SITE_LABEL,
+        isNew: false
+      });
+    });
+
+    const merged = Array.from(byLink.values())
+      .sort((a, b) => {
+        const ta = a.pubDate && !isNaN(a.pubDate) ? a.pubDate.getTime() : 0;
+        const tb = b.pubDate && !isNaN(b.pubDate) ? b.pubDate.getTime() : 0;
+        return tb - ta;
+      })
+      .slice(0, ATHLETIC_ARTICLES_CAP);
+
+    // Two separate "first" conditions, both of which mean "don't flag
+    // anything as new":
+    //  1. knownArticleLinks is null until loadFeeds() has finished its
+    //     first pass, and that null is how loadFeeds() knows it's the
+    //     very first load. This runs in parallel with loadFeeds() and can
+    //     finish first -- so it must NOT initialize knownArticleLinks
+    //     itself, or loadFeeds() would see a non-null set, decide it's
+    //     not the first load, and flag every RSS article as new (which
+    //     is exactly what happened: everything gold, tab title "(90)").
+    //     Skipped here, these articles are in allArticles, so loadFeeds()
+    //     carries them forward and records their links itself.
+    //  2. This is the first time *this* function has run. If loadFeeds()
+    //     happens to win the race, knownArticleLinks is already set, but
+    //     Athletic articles arriving on the page's very first load still
+    //     shouldn't look new any more than the RSS ones do.
+    const feedsHaveLoaded = knownArticleLinks !== null;
+    const isFirstAthleticMerge = !athleticMergedOnce;
+    athleticMergedOnce = true;
+    if (feedsHaveLoaded) {
+      if (!isFirstAthleticMerge) {
+        merged.forEach((a) => {
+          if (!knownArticleLinks.has(a.link)) {
+            a.isNew = true;
+            unacknowledgedNewLinks.add(a.link);
+          }
+        });
+      }
+      merged.forEach((a) => knownArticleLinks.add(a.link));
+    }
+
+    const newCount = feedsHaveLoaded && !isFirstAthleticMerge ? merged.filter((a) => a.isNew).length : 0;
+    if (newCount > 0 && document.hidden) {
+      unseenNewCount += newCount;
+      updateDocumentTitle();
+    }
+
+    const otherArticles = allArticles.filter((a) => a.source !== ATHLETIC_SOURCE_NAME);
+    allArticles = otherArticles.concat(merged).sort((a, b) => {
+      const ta = a.pubDate && !isNaN(a.pubDate) ? a.pubDate.getTime() : 0;
+      const tb = b.pubDate && !isNaN(b.pubDate) ? b.pubDate.getTime() : 0;
+      return tb - ta;
+    });
+
+    rebuildFilterPills();
+    renderArticlesUI();
+  }
+
   async function loadBluesky() {
     const mode = getBskyModeFromURL();
     updateBskyModeButtons(mode);
@@ -1417,6 +1545,7 @@
       bskyStatusEl.textContent = errors.length
         ? posts.length + " posts (" + errors.length + " account" + (errors.length > 1 ? "s" : "") + " failed)"
         : posts.length + " posts";
+      mergeAthleticArticles(posts);
     } catch (err) {
       bskyStatusEl.textContent = "failed to load";
       bskyMainEl.innerHTML = '<div class="error">' + err.message + "</div>";
@@ -1834,6 +1963,16 @@
       }
     });
     renderFeedHealth();
+
+    // Articles not sourced from FEEDS at all (currently just Athletic
+    // links surfaced via a tracked writer's Bluesky post -- see
+    // ATHLETIC_SOURCE_NAME and mergeAthleticArticles()) would otherwise
+    // vanish here, since `fetched` only ever contains the 5 RSS
+    // sources and the very next step replaces allArticles with it
+    // wholesale. Carry them forward regardless of whether loadBluesky()
+    // finished before or after this runs -- the two fetch in parallel.
+    const feedSourceNames = new Set(FEEDS.map((f) => f.name));
+    fetched = fetched.concat(allArticles.filter((a) => !feedSourceNames.has(a.source)));
 
     fetched.sort((a, b) => {
       const ta = a.pubDate && !isNaN(a.pubDate) ? a.pubDate.getTime() : 0;
